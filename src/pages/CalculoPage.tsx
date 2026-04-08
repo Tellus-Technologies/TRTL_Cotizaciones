@@ -158,7 +158,7 @@ export default function CalculoPage() {
   const [modulos, setModulos] = useState<Modulo[]>([]);
   const [tarifas, setTarifas] = useState<TarifaClienteModulo[]>([]);
 
-  const [clienteId, setClienteId] = useState<number | ''>('');
+  const [clienteId, setClienteId] = useState<number | null>(null);
   const [aniosSeleccionados, setAniosSeleccionados] = useState<string[]>([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -356,8 +356,7 @@ export default function CalculoPage() {
   };
 
   const getTarifaModuloPorAnios = (modId: number) => {
-    if (clienteId === '' || aniosOrdenadosSeleccionados.length === 0) return 0;
-
+    if (clienteId === null || aniosOrdenadosSeleccionados.length === 0) return 0;
     for (const year of aniosOrdenadosSeleccionados) {
       const tarifaEncontrada = tarifas.find(
         (t) =>
@@ -704,8 +703,7 @@ export default function CalculoPage() {
       : '';
 
   const modulosDisponibles = useMemo(() => {
-    if (clienteId === '' || aniosSeleccionados.length === 0) return [];
-
+    if (clienteId === null || aniosSeleccionados.length === 0) return [];
     const modIds = tarifas
       .filter(
         (t) =>
@@ -735,7 +733,7 @@ export default function CalculoPage() {
               label="Cliente"
               onChange={(e) => {
                 const value = e.target.value;
-                setClienteId(value === '' ? '' : Number(value));
+                setClienteId(value === '' ? null : Number(value));
                 resetPlaneacion();
               }}
             >
@@ -799,7 +797,7 @@ export default function CalculoPage() {
         <Box mt={2} mb={2}>
           <Typography variant="subtitle1">Selecciona los módulos:</Typography>
           <Box display="flex" flexWrap="wrap" gap={2} mt={1}>
-            {clienteId !== '' &&
+            {clienteId !== null &&
               modulosDisponibles.map((modId) => {
                 const modulo = modulos.find((m) => m.id === modId);
                 if (!modulo) return null;
