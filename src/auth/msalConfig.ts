@@ -7,6 +7,11 @@ const redirectUri = import.meta.env.VITE_AZURE_REDIRECT_URI;
 const postLogoutRedirectUri =
   import.meta.env.VITE_AZURE_POST_LOGOUT_REDIRECT_URI;
 
+console.log("CLIENT_ID:", clientId);
+console.log("TENANT_ID:", tenantId);
+console.log("REDIRECT_URI:", redirectUri);
+console.log("POST_LOGOUT_REDIRECT_URI:", postLogoutRedirectUri);
+
 if (!clientId || !tenantId || !redirectUri || !postLogoutRedirectUri) {
   throw new Error(
     "Faltan variables de entorno de Azure. Revisa tu archivo .env"
