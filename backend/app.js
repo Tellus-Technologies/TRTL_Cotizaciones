@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import clientesRoutes from './routes/clientesRoutes.js';
 import modulosRoutes from './routes/modulosRoutes.js';
 import tarifasRoutes from './routes/tarifasRoutes.js';
+import proyectosRoutes from './routes/proyectosRoutes.js';
+import tipoCambioRoutes from './routes/tipoCambioRoutes.js';
 
 dotenv.config();
 
@@ -18,6 +20,9 @@ app.use(express.json());
 app.use('/api/clientes', clientesRoutes);
 app.use('/api/modulos', modulosRoutes);
 app.use('/api/tarifas', tarifasRoutes);
+app.use('/api/proyectos', proyectosRoutes);
+app.use('/api/tipo-cambio', tipoCambioRoutes);
+
 
 export default app;
 

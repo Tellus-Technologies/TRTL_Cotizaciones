@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -10,6 +11,7 @@ import {
   OutlinedInput,
   Paper,
   Select,
+  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -20,27 +22,31 @@ import {
   Divider,
 } from '@mui/material';
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
-import type { Cliente, Modulo, TarifaClienteModulo } from '../types';
+import Holidays from 'date-holidays';
+import type {
+  Cliente,
+  Modulo,
+  TarifaClienteModulo,
+  ProyectoCreatePayload,
+} from '../types';
 import { getClientes } from '../api/clientesApi';
 import { getModulos } from '../api/modulosApi';
 import { getTarifas } from '../api/tarifasApi';
+import { createProyecto } from '../api/proyectosApi';
+import { getTipoCambioActual } from '../api/tipoCambioApi';
 import { useWorkingDaysMX } from '../hooks/useWorkingDaysMX';
 
 type MetodologiaKey = 'ASAP' | 'ACTIVATE' | 'ITIL' | '';
+type TipoDescuento = 'porcentaje' | 'monto';
 
 type FaseItem = {
   nombre: string;
   dias: number | '';
   porcentaje: number | '';
   fechasAsignadas: string[];
-};
-
-type RecursoBase = {
-  id: number;
-  nombre: string;
-  rol: string;
 };
 
 type RecursoPlaneacion = {
@@ -82,19 +88,19 @@ const METODOLOGIAS: Record<Exclude<MetodologiaKey, ''>, string[]> = {
   ],
 };
 
-const RECURSOS_BASE: RecursoBase[] = [
-  { id: 1, nombre: 'Consultor FI', rol: 'FI' },
-  { id: 2, nombre: 'Consultor SD', rol: 'SD' },
-  { id: 3, nombre: 'Consultor ABAP', rol: 'ABAP' },
-  { id: 4, nombre: 'Consultor BTP', rol: 'BTP' },
-  { id: 5, nombre: 'Project Manager', rol: 'PM' },
-  { id: 6, nombre: 'Consultor MM', rol: 'MM' },
-];
-
 const HOURS_PER_DAY = 8;
+const DEFAULT_EXCHANGE_RATE = 17.92;
 
 function formatCurrency(value: number) {
-  return `$${value.toFixed(2)}`;
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
+function formatDateDMY(dateStr: string) {
+  if (!dateStr) return '';
+  const onlyDate = dateStr.slice(0, 10);
+  const [year, month, day] = onlyDate.split('-');
+  if (!year || !month || !day) return dateStr;
+  return `${day}/${month}/${year}`;
 }
 
 function toISODate(date: Date) {
@@ -112,7 +118,7 @@ function getShortMonthName(date: Date) {
   return ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'][date.getMonth()];
 }
 
-function generateProjectDays(startDate: string, endDate: string): ProjectDay[] {
+function generateProjectDays(startDate: string, endDate: string, hd: Holidays): ProjectDay[] {
   if (!startDate || !endDate) return [];
   if (startDate > endDate) return [];
 
@@ -125,8 +131,9 @@ function generateProjectDays(startDate: string, endDate: string): ProjectDay[] {
 
   while (current <= end) {
     const day = current.getDay();
+    const isHoliday = Boolean(hd.isHoliday(current));
 
-    if (day !== 0 && day !== 6) {
+    if (day !== 0 && day !== 6 && !isHoliday) {
       laborableCounter += 1;
 
       result.push({
@@ -154,25 +161,31 @@ function uniqueSortedDates(dates: string[]) {
 }
 
 export default function CalculoPage() {
+  const navigate = useNavigate();
+
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [modulos, setModulos] = useState<Modulo[]>([]);
   const [tarifas, setTarifas] = useState<TarifaClienteModulo[]>([]);
 
-  const [clienteId, setClienteId] = useState<number | null>(null);
+  const [nombreProyecto, setNombreProyecto] = useState<string>('');
+  const [clienteId, setClienteId] = useState<string>('');
   const [aniosSeleccionados, setAniosSeleccionados] = useState<string[]>([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedModulos, setSelectedModulos] = useState<number[]>([]);
-  const [exchangeRate, setExchangeRate] = useState(17.92);
+  const [exchangeRate, setExchangeRate] = useState<number>(DEFAULT_EXCHANGE_RATE);
+  const [tipoCambioFecha, setTipoCambioFecha] = useState<string>('');
+  const [loadingTipoCambio, setLoadingTipoCambio] = useState<boolean>(false);
 
   const [metodologia, setMetodologia] = useState<MetodologiaKey>('');
   const [fases, setFases] = useState<FaseItem[]>([]);
-
   const [diasManuales, setDiasManuales] = useState<Record<number, string>>({});
 
   const [selectedRecursos, setSelectedRecursos] = useState<number[]>([]);
   const [planeacionRecursos, setPlaneacionRecursos] = useState<RecursoPlaneacion[]>([]);
-  const [tarifasRecursos, setTarifasRecursos] = useState<Record<number, string>>({});
+
+  const [tipoDescuento, setTipoDescuento] = useState<TipoDescuento>('porcentaje');
+  const [valorDescuento, setValorDescuento] = useState<string>('');
 
   const [faseDrag, setFaseDrag] = useState<{
     faseIndex: number;
@@ -180,10 +193,81 @@ export default function CalculoPage() {
     isDragging: boolean;
   } | null>(null);
 
+  const [savingProject, setSavingProject] = useState(false);
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'warning' | 'info';
+  }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
+
+  const hd = useMemo(() => new Holidays('MX'), []);
+
+  const clienteIdNumber = useMemo(() => {
+    return clienteId === '' ? null : Number(clienteId);
+  }, [clienteId]);
+
+  const showSnackbar = (
+    message: string,
+    severity: 'success' | 'error' | 'warning' | 'info'
+  ) => {
+    setSnackbar({
+      open: true,
+      message,
+      severity,
+    });
+  };
+
+  const cargarTipoCambioActual = async (mostrarMensaje = false) => {
+    try {
+      setLoadingTipoCambio(true);
+
+      const data = await getTipoCambioActual();
+
+      if (typeof data?.tipo_cambio === 'number' && data.tipo_cambio > 0) {
+        setExchangeRate(data.tipo_cambio);
+        setTipoCambioFecha(data.fecha || '');
+
+        if (mostrarMensaje) {
+          showSnackbar(`Tipo de cambio actualizado: ${data.tipo_cambio}`, 'success');
+        }
+      } else if (mostrarMensaje) {
+        showSnackbar('No se recibió un tipo de cambio válido', 'warning');
+      }
+    } catch (error) {
+      console.error(error);
+      if (mostrarMensaje) {
+        showSnackbar('No se pudo obtener el tipo de cambio actual', 'warning');
+      }
+    } finally {
+      setLoadingTipoCambio(false);
+    }
+  };
+
+  const loadData = async () => {
+    try {
+      const [clientesData, modulosData, tarifasData] = await Promise.all([
+        getClientes(),
+        getModulos(),
+        getTarifas(),
+      ]);
+
+      setClientes(clientesData);
+      setModulos(modulosData);
+      setTarifas(tarifasData);
+
+      await cargarTipoCambioActual(false);
+    } catch (error) {
+      console.error(error);
+      showSnackbar('Error al cargar catálogos iniciales', 'error');
+    }
+  };
+
   useEffect(() => {
-    getClientes().then(setClientes);
-    getModulos().then(setModulos);
-    getTarifas().then(setTarifas);
+    void loadData();
   }, []);
 
   useEffect(() => {
@@ -198,8 +282,8 @@ export default function CalculoPage() {
   const workingDays = useWorkingDaysMX(startDate, endDate);
 
   const diasProyecto = useMemo(() => {
-    return generateProjectDays(startDate, endDate);
-  }, [startDate, endDate]);
+    return generateProjectDays(startDate, endDate, hd);
+  }, [startDate, endDate, hd]);
 
   const groupedWeeks = useMemo(() => {
     const map = new Map<string, number>();
@@ -241,14 +325,29 @@ export default function CalculoPage() {
     setDiasManuales({});
     setSelectedRecursos([]);
     setPlaneacionRecursos([]);
-    setTarifasRecursos({});
-    setFases((prev) =>
-      prev.map((f) => ({
-        ...f,
-        dias: '',
-        fechasAsignadas: [],
-      }))
-    );
+    setMetodologia('');
+    setFases([]);
+    setTipoDescuento('porcentaje');
+    setValorDescuento('');
+  };
+
+  const resetAllForm = () => {
+    setNombreProyecto('');
+    setClienteId('');
+    setAniosSeleccionados(aniosDisponibles.length > 0 ? [aniosDisponibles[0]] : []);
+    setStartDate('');
+    setEndDate('');
+    setSelectedModulos([]);
+    setExchangeRate(DEFAULT_EXCHANGE_RATE);
+    setTipoCambioFecha('');
+    setMetodologia('');
+    setFases([]);
+    setDiasManuales({});
+    setSelectedRecursos([]);
+    setPlaneacionRecursos([]);
+    setTipoDescuento('porcentaje');
+    setValorDescuento('');
+    void cargarTipoCambioActual(false);
   };
 
   const toggleModulo = (id: number) => {
@@ -275,14 +374,6 @@ export default function CalculoPage() {
 
         return prevPlan;
       });
-
-      if (exists) {
-        setTarifasRecursos((prevTarifas) => {
-          const next = { ...prevTarifas };
-          delete next[id];
-          return next;
-        });
-      }
 
       return updated;
     });
@@ -337,30 +428,25 @@ export default function CalculoPage() {
     }));
   };
 
-  const handleTarifaRecursoChange = (recursoId: number, value: string) => {
+  const handleDescuentoChange = (value: string) => {
     if (value === '') {
-      setTarifasRecursos((prev) => ({
-        ...prev,
-        [recursoId]: '',
-      }));
+      setValorDescuento('');
       return;
     }
 
     const numero = Number(value);
     if (Number.isNaN(numero) || numero < 0) return;
 
-    setTarifasRecursos((prev) => ({
-      ...prev,
-      [recursoId]: value,
-    }));
+    setValorDescuento(value);
   };
 
   const getTarifaModuloPorAnios = (modId: number) => {
-    if (clienteId === null || aniosOrdenadosSeleccionados.length === 0) return 0;
+    if (clienteIdNumber === null || aniosOrdenadosSeleccionados.length === 0) return 0;
+
     for (const year of aniosOrdenadosSeleccionados) {
       const tarifaEncontrada = tarifas.find(
         (t) =>
-          t.cliente_id === clienteId &&
+          t.cliente_id === clienteIdNumber &&
           t.modulo_id === modId &&
           String(t.anio_fiscal) === year
       );
@@ -404,7 +490,7 @@ export default function CalculoPage() {
     workingDays,
     exchangeRate,
     diasManuales,
-    clienteId,
+    clienteIdNumber,
     aniosOrdenadosSeleccionados,
     tarifas,
   ]);
@@ -415,6 +501,14 @@ export default function CalculoPage() {
 
   const totalProyectoUSD = useMemo(() => {
     return resumenModulos.reduce((acc, item) => acc + item.totalUSD, 0);
+  }, [resumenModulos]);
+
+  const totalProyectoDias = useMemo(() => {
+    return resumenModulos.reduce((acc, item) => acc + item.dias, 0);
+  }, [resumenModulos]);
+
+  const totalProyectoHoras = useMemo(() => {
+    return resumenModulos.reduce((acc, item) => acc + item.horas, 0);
   }, [resumenModulos]);
 
   const totalPorcentajeAsignado = useMemo(() => {
@@ -495,38 +589,68 @@ export default function CalculoPage() {
   };
 
   const getFasePlanInicio = (fase: FaseItem) => {
-    if (!fase.fechasAsignadas.length) return '';
+    if (!fase.fechasAsignadas.length) return null;
 
     const fechasOrdenadas = [...fase.fechasAsignadas].sort((a, b) => a.localeCompare(b));
     const primeraFecha = fechasOrdenadas[0];
     const dia = diasProyecto.find((d) => d.fecha === primeraFecha);
 
-    return dia ? dia.diaNumero : '';
+    return dia ? dia.diaNumero : null;
   };
+
+  const modulosDisponibles = useMemo(() => {
+    if (clienteIdNumber === null || aniosSeleccionados.length === 0) return [];
+
+    const modIds = tarifas
+      .filter(
+        (t) =>
+          t.cliente_id === clienteIdNumber &&
+          aniosSeleccionados.includes(String(t.anio_fiscal))
+      )
+      .map((t) => t.modulo_id)
+      .filter((value, index, self) => self.indexOf(value) === index);
+
+    return modIds;
+  }, [clienteIdNumber, aniosSeleccionados, tarifas]);
+
+  const recursosDisponibles = useMemo(() => {
+    return modulosDisponibles
+      .map((modId) => {
+        const moduloInfo = modulos.find((m) => m.id === modId);
+        return {
+          id: modId,
+          nombre: moduloInfo?.modu || '',
+          tarifa: getTarifaModuloPorAnios(modId),
+        };
+      })
+      .filter((item) => item.nombre !== '');
+  }, [modulosDisponibles, modulos, clienteIdNumber, aniosOrdenadosSeleccionados, tarifas]);
+
+  useEffect(() => {
+    setSelectedRecursos((prev) =>
+      prev.filter((id) => recursosDisponibles.some((r) => r.id === id))
+    );
+
+    setPlaneacionRecursos((prev) =>
+      prev.filter((p) => recursosDisponibles.some((r) => r.id === p.recursoId))
+    );
+  }, [recursosDisponibles]);
 
   const resumenRecursos = useMemo(() => {
     return planeacionRecursos
       .filter((p) => selectedRecursos.includes(p.recursoId))
       .map((plan) => {
-        const recurso = RECURSOS_BASE.find((r) => r.id === plan.recursoId);
+        const recurso = recursosDisponibles.find((r) => r.id === plan.recursoId);
         const diasAsignados = plan.fechasAsignadas.length;
         const horas = diasAsignados * HOURS_PER_DAY;
-
-        const tarifaTexto = tarifasRecursos[plan.recursoId];
-        const tarifaHora =
-          tarifaTexto !== undefined && tarifaTexto !== ''
-            ? Number(tarifaTexto)
-            : 0;
-
-        const tarifaSegura = Number.isNaN(tarifaHora) ? 0 : tarifaHora;
-        const totalMXN = tarifaSegura * horas;
+        const tarifaHora = recurso?.tarifa || 0;
+        const totalMXN = tarifaHora * horas;
         const totalUSD = exchangeRate > 0 ? totalMXN / exchangeRate : 0;
 
         return {
           recursoId: plan.recursoId,
           nombre: recurso?.nombre || '',
-          rol: recurso?.rol || '',
-          tarifaHora: tarifaSegura,
+          tarifaHora,
           fechasAsignadas: plan.fechasAsignadas,
           diasAsignados,
           horas,
@@ -534,7 +658,7 @@ export default function CalculoPage() {
           totalUSD,
         };
       });
-  }, [planeacionRecursos, selectedRecursos, exchangeRate, tarifasRecursos]);
+  }, [planeacionRecursos, selectedRecursos, recursosDisponibles, exchangeRate]);
 
   const totalRecursosDias = useMemo(() => {
     return resumenRecursos.reduce((acc, item) => acc + item.diasAsignados, 0);
@@ -551,6 +675,34 @@ export default function CalculoPage() {
   const totalRecursosUSD = useMemo(() => {
     return resumenRecursos.reduce((acc, item) => acc + item.totalUSD, 0);
   }, [resumenRecursos]);
+
+  const descuentoMXN = useMemo(() => {
+    const valor = Number(valorDescuento);
+
+    if (Number.isNaN(valor) || valor <= 0) return 0;
+
+    if (tipoDescuento === 'porcentaje') {
+      return totalRecursosMXN * (valor / 100);
+    }
+
+    return valor;
+  }, [valorDescuento, tipoDescuento, totalRecursosMXN]);
+
+  const descuentoMXNAplicado = useMemo(() => {
+    return Math.min(descuentoMXN, totalRecursosMXN);
+  }, [descuentoMXN, totalRecursosMXN]);
+
+  const descuentoUSD = useMemo(() => {
+    return exchangeRate > 0 ? descuentoMXNAplicado / exchangeRate : 0;
+  }, [descuentoMXNAplicado, exchangeRate]);
+
+  const totalRecursosConDescuentoMXN = useMemo(() => {
+    return Math.max(0, totalRecursosMXN - descuentoMXNAplicado);
+  }, [totalRecursosMXN, descuentoMXNAplicado]);
+
+  const totalRecursosConDescuentoUSD = useMemo(() => {
+    return Math.max(0, totalRecursosUSD - descuentoUSD);
+  }, [totalRecursosUSD, descuentoUSD]);
 
   const exportToExcel = () => {
     const resumenData = resumenModulos.map((item) => ({
@@ -576,7 +728,7 @@ export default function CalculoPage() {
       return {
         Metodología: metodologia,
         Fase: fase.nombre,
-        'Plan inicio': getFasePlanInicio(fase),
+        'Plan inicio': getFasePlanInicio(fase) ?? '',
         'Plan duración': fase.fechasAsignadas.length,
         'Porcentaje monetario': porcentajeSeguro,
         'Monto fase (MXN)': montoMXN.toFixed(2),
@@ -586,13 +738,25 @@ export default function CalculoPage() {
 
     const recursosResumenData = resumenRecursos.map((item) => ({
       Recurso: item.nombre,
-      Rol: item.rol,
       'Tarifa (MXN/h)': item.tarifaHora,
       'Días asignados': item.diasAsignados,
       Horas: item.horas,
-      'Total (MXN)': item.totalMXN.toFixed(2),
-      'Total (USD)': item.totalUSD.toFixed(2),
+      'Total real (MXN)': item.totalMXN.toFixed(2),
+      'Total real (USD)': item.totalUSD.toFixed(2),
     }));
+
+    const descuentoData = [
+      {
+        'Tipo descuento': tipoDescuento,
+        'Valor descuento': valorDescuento || '0',
+        'Total recursos real (MXN)': totalRecursosMXN.toFixed(2),
+        'Total recursos real (USD)': totalRecursosUSD.toFixed(2),
+        'Descuento aplicado (MXN)': descuentoMXNAplicado.toFixed(2),
+        'Descuento aplicado (USD)': descuentoUSD.toFixed(2),
+        'Total con descuento (MXN)': totalRecursosConDescuentoMXN.toFixed(2),
+        'Total con descuento (USD)': totalRecursosConDescuentoUSD.toFixed(2),
+      },
+    ];
 
     const workbook = XLSX.utils.book_new();
 
@@ -608,6 +772,9 @@ export default function CalculoPage() {
       const wsRecursos = XLSX.utils.json_to_sheet(recursosResumenData);
       XLSX.utils.book_append_sheet(workbook, wsRecursos, 'Recursos');
     }
+
+    const wsDescuento = XLSX.utils.json_to_sheet(descuentoData);
+    XLSX.utils.book_append_sheet(workbook, wsDescuento, 'Descuento Recursos');
 
     if (fases.length > 0 && diasProyecto.length > 0) {
       const fasesMatrix: (string | number)[][] = [];
@@ -631,7 +798,7 @@ export default function CalculoPage() {
       fases.forEach((fase) => {
         fasesMatrix.push([
           fase.nombre,
-          getFasePlanInicio(fase) || '',
+          getFasePlanInicio(fase) ?? '',
           fase.fechasAsignadas.length,
           Number(fase.porcentaje || 0),
           ...diasProyecto.map((d) => (fase.fechasAsignadas.includes(d.fecha) ? 1 : 0)),
@@ -647,7 +814,6 @@ export default function CalculoPage() {
 
       matrixData.push([
         'Recurso',
-        'Rol',
         'Tarifa (MXN/h)',
         'Días',
         'Horas',
@@ -661,14 +827,12 @@ export default function CalculoPage() {
         '',
         '',
         '',
-        '',
         ...diasProyecto.map((d) => `${d.dayNameShort}${d.diaNumero}`),
       ]);
 
       resumenRecursos.forEach((recurso) => {
         matrixData.push([
           recurso.nombre,
-          recurso.rol,
           recurso.tarifaHora,
           recurso.diasAsignados,
           recurso.horas,
@@ -693,6 +857,145 @@ export default function CalculoPage() {
     saveAs(file, 'Calculo_de_tarifas.xlsx');
   };
 
+  const validarProyecto = () => {
+    if (clienteIdNumber === null) {
+      showSnackbar('Selecciona un cliente', 'warning');
+      return false;
+    }
+
+    if (!startDate || !endDate) {
+      showSnackbar('Debes capturar fecha de inicio y fecha fin', 'warning');
+      return false;
+    }
+
+    if (startDate > endDate) {
+      showSnackbar('La fecha de inicio no puede ser mayor a la fecha final', 'warning');
+      return false;
+    }
+
+    if (selectedModulos.length === 0) {
+      showSnackbar('Selecciona al menos un módulo', 'warning');
+      return false;
+    }
+
+    if (exchangeRate <= 0) {
+      showSnackbar('El tipo de cambio debe ser mayor a 0', 'warning');
+      return false;
+    }
+
+    if (!metodologia) {
+      showSnackbar('Selecciona una metodología', 'warning');
+      return false;
+    }
+
+    if (fases.length === 0) {
+      showSnackbar('Debes configurar las fases del proyecto', 'warning');
+      return false;
+    }
+
+    if (totalDiasAsignados !== workingDays) {
+      showSnackbar(
+        `La suma de días de fases debe ser igual a los días hábiles calculados (${workingDays})`,
+        'warning'
+      );
+      return false;
+    }
+
+    if (Math.abs(totalPorcentajeAsignado - 100) > 0.001) {
+      showSnackbar('El porcentaje total de las fases debe sumar 100%', 'warning');
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleGuardarProyecto = async () => {
+    if (!validarProyecto()) return;
+
+    if (clienteIdNumber === null) return;
+
+    try {
+      setSavingProject(true);
+
+      const payload: ProyectoCreatePayload = {
+        cliente_id: clienteIdNumber,
+        nombre_proyecto: nombreProyecto.trim() || undefined,
+        metodologia,
+        fecha_inicio: startDate,
+        fecha_fin: endDate,
+        tipo_cambio: exchangeRate,
+        anios_fiscales: aniosSeleccionados,
+        total_mxn: totalProyectoMXN,
+        total_usd: totalProyectoUSD,
+        total_dias: totalProyectoDias,
+        total_horas: totalProyectoHoras,
+        modulos: resumenModulos.map((item) => ({
+          modulo_id: item.modId,
+          tarifa_mxn: item.tarifa,
+          dias: item.dias,
+          horas: item.horas,
+          total_mxn: item.totalMXN,
+          total_usd: item.totalUSD,
+        })),
+        fases: fases.map((fase, index) => {
+          const porcentaje =
+            fase.porcentaje === '' || fase.porcentaje === null || fase.porcentaje === undefined
+              ? 0
+              : Number(fase.porcentaje);
+
+          const porcentajeSeguro = Number.isNaN(porcentaje) ? 0 : porcentaje;
+          const montoMXN = totalProyectoMXN * (porcentajeSeguro / 100);
+          const montoUSD = totalProyectoUSD * (porcentajeSeguro / 100);
+
+          return {
+            orden_fase: index + 1,
+            nombre_fase: fase.nombre,
+            dias: fase.fechasAsignadas.length,
+            porcentaje: porcentajeSeguro,
+            plan_inicio: getFasePlanInicio(fase),
+            monto_mxn: montoMXN,
+            monto_usd: montoUSD,
+            fechas_asignadas: [...fase.fechasAsignadas],
+          };
+        }),
+        recursos: resumenRecursos.map((recurso) => ({
+          modulo_id: recurso.recursoId,
+          tarifa_hora: recurso.tarifaHora,
+          dias_asignados: recurso.diasAsignados,
+          horas: recurso.horas,
+          total_mxn: recurso.totalMXN,
+          total_usd: recurso.totalUSD,
+          fechas_asignadas: [...recurso.fechasAsignadas],
+        })),
+      };
+
+      const response = await createProyecto(payload);
+
+      showSnackbar(
+        `Proyecto guardado correctamente. Número de proyecto: ${response?.numero_proyecto ?? ''}`,
+        'success'
+      );
+
+      const proyectoId = response?.id;
+
+      resetAllForm();
+
+      if (proyectoId) {
+        setTimeout(() => {
+          navigate(`/proyectos/${proyectoId}`);
+        }, 1200);
+      }
+    } catch (error: any) {
+      console.error(error);
+      const mensaje =
+        error?.response?.data?.error ||
+        'Ocurrió un error al guardar el proyecto';
+      showSnackbar(mensaje, 'error');
+    } finally {
+      setSavingProject(false);
+    }
+  };
+
   const nombreMetodologia =
     metodologia === 'ASAP'
       ? 'Metodología ASAP'
@@ -701,20 +1004,6 @@ export default function CalculoPage() {
       : metodologia === 'ITIL'
       ? 'Metodología ITIL'
       : '';
-
-  const modulosDisponibles = useMemo(() => {
-    if (clienteId === null || aniosSeleccionados.length === 0) return [];
-    const modIds = tarifas
-      .filter(
-        (t) =>
-          t.cliente_id === clienteId &&
-          aniosSeleccionados.includes(String(t.anio_fiscal))
-      )
-      .map((t) => t.modulo_id)
-      .filter((value, index, self) => self.indexOf(value) === index);
-
-    return modIds;
-  }, [clienteId, aniosSeleccionados, tarifas]);
 
   return (
     <Box sx={{ maxWidth: 1600, mx: 'auto', mt: 4, px: 2, mb: 5 }}>
@@ -726,19 +1015,26 @@ export default function CalculoPage() {
         <Divider sx={{ mb: 3 }} />
 
         <Box display="flex" flexWrap="wrap" gap={2} mb={2}>
+          <TextField
+            label="Nombre del proyecto"
+            value={nombreProyecto}
+            onChange={(e) => setNombreProyecto(e.target.value)}
+            sx={{ minWidth: 280 }}
+          />
+
           <FormControl sx={{ minWidth: 220 }}>
             <InputLabel>Cliente</InputLabel>
             <Select
               value={clienteId}
               label="Cliente"
               onChange={(e) => {
-                const value = e.target.value;
-                setClienteId(value === '' ? null : Number(value));
+                setClienteId(String(e.target.value));
                 resetPlaneacion();
               }}
             >
+              <MenuItem value="">Selecciona</MenuItem>
               {clientes.map((c) => (
-                <MenuItem key={c.id} value={c.id}>
+                <MenuItem key={c.id} value={String(c.id)}>
                   {c.nombre}
                 </MenuItem>
               ))}
@@ -756,6 +1052,8 @@ export default function CalculoPage() {
                 setAniosSeleccionados(years);
                 setSelectedModulos([]);
                 setDiasManuales({});
+                setSelectedRecursos([]);
+                setPlaneacionRecursos([]);
               }}
               input={<OutlinedInput label="Años Fiscales" />}
               renderValue={(selected) => (selected as string[]).join(', ')}
@@ -787,17 +1085,13 @@ export default function CalculoPage() {
         </Box>
 
         <Typography variant="subtitle1" gutterBottom>
-          Días laborables (hook actual): <strong>{workingDays}</strong>
-        </Typography>
-
-        <Typography variant="subtitle2" gutterBottom color="text.secondary">
-          Días generados visualmente para planeación: <strong>{diasProyecto.length}</strong>
+          Días hábiles calculados: <strong>{workingDays}</strong>
         </Typography>
 
         <Box mt={2} mb={2}>
           <Typography variant="subtitle1">Selecciona los módulos:</Typography>
           <Box display="flex" flexWrap="wrap" gap={2} mt={1}>
-            {clienteId !== null &&
+            {clienteIdNumber !== null &&
               modulosDisponibles.map((modId) => {
                 const modulo = modulos.find((m) => m.id === modId);
                 if (!modulo) return null;
@@ -879,13 +1173,27 @@ export default function CalculoPage() {
           </TableBody>
         </Table>
 
-        <Box mt={3}>
+        <Box mt={3} display="flex" gap={2} flexWrap="wrap" alignItems="center">
           <TextField
             label="Tipo de cambio actual (MXN/USD)"
             type="number"
             value={exchangeRate}
             onChange={(e) => setExchangeRate(Number(e.target.value))}
           />
+
+          <Button
+            variant="outlined"
+            onClick={() => void cargarTipoCambioActual(true)}
+            disabled={loadingTipoCambio}
+          >
+            {loadingTipoCambio ? 'Actualizando...' : 'Actualizar tipo de cambio'}
+          </Button>
+
+          {tipoCambioFecha && (
+            <Typography variant="body2" color="text.secondary">
+              Fecha Banxico: {formatDateDMY(tipoCambioFecha)}
+            </Typography>
+          )}
         </Box>
 
         <Divider sx={{ my: 4 }} />
@@ -995,7 +1303,7 @@ export default function CalculoPage() {
                         </TableCell>
 
                         <TableCell align="center" sx={{ fontWeight: 'bold' }}>
-                          {planInicio}
+                          {planInicio ?? ''}
                         </TableCell>
 
                         <TableCell align="center" sx={{ fontWeight: 'bold' }}>
@@ -1098,14 +1406,14 @@ export default function CalculoPage() {
               </Typography>
 
               <Typography>
-                <strong>Días base calculados arriba:</strong> {workingDays}
+                <strong>Días hábiles calculados:</strong> {workingDays}
               </Typography>
             </Box>
 
             {totalDiasAsignados !== workingDays && (
               <Box mt={2}>
                 <Typography color="error">
-                  La suma de los días asignados en las fases debe ser igual a los días laborables calculados arriba ({workingDays}).
+                  La suma de los días asignados en las fases debe ser igual a los días hábiles calculados ({workingDays}).
                 </Typography>
               </Box>
             )}
@@ -1130,7 +1438,7 @@ export default function CalculoPage() {
           <Typography variant="subtitle1">Selecciona los recursos:</Typography>
 
           <Box display="flex" flexWrap="wrap" gap={2} mt={1}>
-            {RECURSOS_BASE.map((recurso) => (
+            {recursosDisponibles.map((recurso) => (
               <FormControlLabel
                 key={recurso.id}
                 control={
@@ -1139,7 +1447,7 @@ export default function CalculoPage() {
                     onChange={() => toggleRecurso(recurso.id)}
                   />
                 }
-                label={recurso.nombre}
+                label={`${recurso.nombre} (${formatCurrency(recurso.tarifa)}/h)`}
               />
             ))}
           </Box>
@@ -1151,16 +1459,66 @@ export default function CalculoPage() {
               <Chip label={`Recursos seleccionados: ${selectedRecursos.length}`} color="primary" />
               <Chip label={`Días planeados: ${totalRecursosDias}`} />
               <Chip label={`Horas planeadas: ${totalRecursosHoras}`} />
-              <Chip label={`Costo MXN: ${formatCurrency(totalRecursosMXN)}`} />
-              <Chip label={`Costo USD: ${formatCurrency(totalRecursosUSD)}`} />
+              <Chip label={`Costo real MXN: ${formatCurrency(totalRecursosMXN)}`} />
+              <Chip label={`Costo real USD: ${formatCurrency(totalRecursosUSD)}`} />
+              <Chip label={`Costo final MXN: ${formatCurrency(totalRecursosConDescuentoMXN)}`} color="success" />
+              <Chip label={`Costo final USD: ${formatCurrency(totalRecursosConDescuentoUSD)}`} color="success" />
             </Box>
+
+            <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+              <Typography variant="subtitle1" gutterBottom>
+                Descuento sobre total de recursos
+              </Typography>
+
+              <Box display="flex" gap={2} flexWrap="wrap" alignItems="center">
+                <FormControl sx={{ minWidth: 220 }}>
+                  <InputLabel>Tipo de descuento</InputLabel>
+                  <Select
+                    value={tipoDescuento}
+                    label="Tipo de descuento"
+                    onChange={(e) => setTipoDescuento(e.target.value as TipoDescuento)}
+                  >
+                    <MenuItem value="porcentaje">Porcentaje</MenuItem>
+                    <MenuItem value="monto">Monto fijo</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <TextField
+                  label={tipoDescuento === 'porcentaje' ? 'Descuento (%)' : 'Descuento (MXN)'}
+                  type="number"
+                  value={valorDescuento}
+                  onChange={(e) => handleDescuentoChange(e.target.value)}
+                  sx={{ minWidth: 180 }}
+                />
+              </Box>
+
+              <Box mt={2} display="flex" gap={3} flexWrap="wrap">
+                <Typography>
+                  <strong>Total real MXN:</strong> {formatCurrency(totalRecursosMXN)}
+                </Typography>
+                <Typography>
+                  <strong>Total real USD:</strong> {formatCurrency(totalRecursosUSD)}
+                </Typography>
+                <Typography>
+                  <strong>Descuento MXN:</strong> {formatCurrency(descuentoMXNAplicado)}
+                </Typography>
+                <Typography>
+                  <strong>Descuento USD:</strong> {formatCurrency(descuentoUSD)}
+                </Typography>
+                <Typography color="success.main">
+                  <strong>Total con descuento MXN:</strong> {formatCurrency(totalRecursosConDescuentoMXN)}
+                </Typography>
+                <Typography color="success.main">
+                  <strong>Total con descuento USD:</strong> {formatCurrency(totalRecursosConDescuentoUSD)}
+                </Typography>
+              </Box>
+            </Paper>
 
             <Box sx={{ overflowX: 'auto', border: '1px solid #d9d9d9', borderRadius: 2, bgcolor: '#fff' }}>
               <Table size="small" sx={{ minWidth: 1200 }}>
                 <TableHead>
                   <TableRow sx={{ backgroundColor: '#fff8e1' }}>
                     <TableCell rowSpan={2}><strong>Recurso</strong></TableCell>
-                    <TableCell rowSpan={2}><strong>Rol</strong></TableCell>
                     <TableCell rowSpan={2}><strong>Tarifa</strong></TableCell>
                     <TableCell rowSpan={2}><strong>Días</strong></TableCell>
                     <TableCell rowSpan={2}><strong>Horas</strong></TableCell>
@@ -1212,23 +1570,7 @@ export default function CalculoPage() {
                   {resumenRecursos.map((recurso) => (
                     <TableRow key={recurso.recursoId} hover>
                       <TableCell>{recurso.nombre}</TableCell>
-                      <TableCell>{recurso.rol}</TableCell>
-
-                      <TableCell>
-                        <TextField
-                          variant="standard"
-                          type="number"
-                          value={tarifasRecursos[recurso.recursoId] ?? ''}
-                          onChange={(e) => handleTarifaRecursoChange(recurso.recursoId, e.target.value)}
-                          inputProps={{
-                            min: 0,
-                            step: 0.01,
-                          }}
-                          placeholder="Tarifa"
-                          sx={{ width: 90 }}
-                        />
-                      </TableCell>
-
+                      <TableCell>{formatCurrency(recurso.tarifaHora)}</TableCell>
                       <TableCell>{recurso.diasAsignados}</TableCell>
                       <TableCell>{recurso.horas}</TableCell>
                       <TableCell>{formatCurrency(recurso.totalMXN)}</TableCell>
@@ -1279,16 +1621,27 @@ export default function CalculoPage() {
                   ))}
 
                   {resumenRecursos.length > 0 && (
-                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
-                      <TableCell colSpan={3}>
-                        <strong>Total recursos</strong>
-                      </TableCell>
-                      <TableCell><strong>{totalRecursosDias}</strong></TableCell>
-                      <TableCell><strong>{totalRecursosHoras}</strong></TableCell>
-                      <TableCell><strong>{formatCurrency(totalRecursosMXN)}</strong></TableCell>
-                      <TableCell colSpan={1}></TableCell>
-                      <TableCell colSpan={diasProyecto.length}></TableCell>
-                    </TableRow>
+                    <>
+                      <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                        <TableCell colSpan={2}>
+                          <strong>Total recursos real</strong>
+                        </TableCell>
+                        <TableCell><strong>{totalRecursosDias}</strong></TableCell>
+                        <TableCell><strong>{totalRecursosHoras}</strong></TableCell>
+                        <TableCell><strong>{formatCurrency(totalRecursosMXN)}</strong></TableCell>
+                        <TableCell colSpan={1}></TableCell>
+                        <TableCell colSpan={diasProyecto.length}></TableCell>
+                      </TableRow>
+
+                      <TableRow sx={{ backgroundColor: '#eef7ee' }}>
+                        <TableCell colSpan={4}>
+                          <strong>Total recursos con descuento</strong>
+                        </TableCell>
+                        <TableCell><strong>{formatCurrency(totalRecursosConDescuentoMXN)}</strong></TableCell>
+                        <TableCell colSpan={1}></TableCell>
+                        <TableCell colSpan={diasProyecto.length}></TableCell>
+                      </TableRow>
+                    </>
                   )}
                 </TableBody>
               </Table>
@@ -1296,12 +1649,35 @@ export default function CalculoPage() {
           </>
         )}
 
-        <Box mt={4}>
-          <Button variant="contained" onClick={exportToExcel}>
+        <Box mt={4} display="flex" gap={2} flexWrap="wrap">
+          <Button variant="outlined" onClick={exportToExcel}>
             Exportar un Excel
+          </Button>
+
+          <Button
+            variant="contained"
+            onClick={handleGuardarProyecto}
+            disabled={savingProject}
+          >
+            {savingProject ? 'Guardando proyecto...' : 'Guardar proyecto'}
           </Button>
         </Box>
       </Paper>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4500}
+        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          variant="filled"
+          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

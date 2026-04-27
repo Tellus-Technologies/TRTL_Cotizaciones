@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { Delete, Edit } from '@mui/icons-material';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Cliente } from '../types';
 import { getClientes, createCliente, updateCliente, deleteCliente } from '../api/clientesApi';
 
@@ -16,6 +17,8 @@ export default function ClientesPage() {
   const [nombre, setNombre] = useState('');
   const [comen, setComen] = useState('');
   const [deleteClienteId, setDeleteClienteId] = useState<number | null>(null);
+
+  const navigate = useNavigate();
 
   const [snackbar, setSnackbar] = useState<{ open: boolean, message: string, severity: 'success' | 'error' }>({
     open: false,
@@ -87,7 +90,7 @@ export default function ClientesPage() {
   };
 
   return (
-    <Box sx={{ maxWidth: 800, mx: 'auto', mt: 4, px: 2 }}>
+    <Box sx={{ maxWidth: 900, mx: 'auto', mt: 4, px: 2 }}>
       <Paper elevation={3} sx={{ p: 4, borderRadius: 3, bgcolor: '#f0f4f8' }}>
         <Typography variant="h5" gutterBottom color="primary.main">
           Gestión de Clientes
@@ -111,7 +114,20 @@ export default function ClientesPage() {
             {clientes.map(cliente => (
               <TableRow key={cliente.id}>
                 <TableCell>{cliente.id}</TableCell>
-                <TableCell>{cliente.nombre}</TableCell>
+                <TableCell>
+                  <Typography
+                    sx={{
+                      color: 'primary.main',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      '&:hover': { opacity: 0.8 }
+                    }}
+                    onClick={() => navigate(`/clientes/${cliente.id}/tarifas`)}
+                  >
+                    {cliente.nombre}
+                  </Typography>
+                </TableCell>
                 <TableCell>{cliente.comen}</TableCell>
                 <TableCell align="right">
                   <IconButton onClick={() => handleOpen(cliente)}><Edit /></IconButton>
@@ -122,7 +138,6 @@ export default function ClientesPage() {
           </TableBody>
         </Table>
 
-        {/* Dialog para agregar/editar */}
         <Dialog open={open} onClose={handleClose} fullWidth>
           <DialogTitle>{editingCliente ? 'Editar Cliente' : 'Agregar Cliente'}</DialogTitle>
           <DialogContent>
@@ -147,7 +162,6 @@ export default function ClientesPage() {
           </DialogActions>
         </Dialog>
 
-        {/* Confirmación para borrar */}
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
           <DialogTitle>Confirmar eliminación</DialogTitle>
           <DialogContent>
@@ -159,7 +173,6 @@ export default function ClientesPage() {
           </DialogActions>
         </Dialog>
 
-        {/* Snackbar */}
         <Snackbar
           open={snackbar.open}
           autoHideDuration={4000}
