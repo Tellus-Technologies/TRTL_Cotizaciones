@@ -3,6 +3,7 @@ import type {
   ProyectoCreatePayload,
   ProyectoDetalleResponse,
   ProyectoResumen,
+  ProyectoUpdatePayload,
 } from '../types';
 
 export const getProyectos = async (params?: {
@@ -21,6 +22,14 @@ export const getProyectoDetalle = async (id: number | string) => {
 
 export const createProyecto = async (payload: ProyectoCreatePayload) => {
   const { data } = await api.post('/proyectos', payload);
+  return data;
+};
+
+export const updateProyecto = async (
+  id: number | string,
+  payload: ProyectoUpdatePayload
+) => {
+  const { data } = await api.put(`/proyectos/${id}`, payload);
   return data;
 };
 

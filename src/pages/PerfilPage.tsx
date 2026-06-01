@@ -336,35 +336,6 @@ export default function PerfilPage() {
                   </Typography>
                 </Paper>
               </Grid>
-
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 2,
-                    borderRadius: 3,
-                    border: "1px solid #e2e8f0",
-                    bgcolor: "#f8fafc",
-                  }}
-                >
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
-                    <BadgeOutlinedIcon sx={{ color: "#1565c0" }} />
-                    <Typography sx={{ fontWeight: 700, color: "#334155", fontSize: 14 }}>
-                      ID de cuenta
-                    </Typography>
-                  </Box>
-                  <Typography
-                    sx={{
-                      color: "#0f172a",
-                      fontWeight: 600,
-                      wordBreak: "break-word",
-                      fontSize: 13.5,
-                    }}
-                  >
-                    {account?.homeAccountId || "No disponible"}
-                  </Typography>
-                </Paper>
-              </Grid>
             </Grid>
           </Paper>
         </Grid>

@@ -8,7 +8,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "author": "Tu Nombre o Empresa",
+  "author": "Sistema Interno",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",

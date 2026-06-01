@@ -9,7 +9,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "electron": "electron ."
+    "electron": "electron .",
+    "heroku-postbuild": "npm run build && npm --prefix backend install --omit=dev",
+    "start": "npm --prefix backend start"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.6.3",
@@ -44,5 +46,8 @@
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.34.1",
     "vite": "^7.0.0"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

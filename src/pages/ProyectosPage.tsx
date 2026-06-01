@@ -1,11 +1,20 @@
 import {
+  Alert,
   Box,
   Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Paper,
   Select,
+  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -13,14 +22,6 @@ import {
   TableRow,
   TextField,
   Typography,
-  Divider,
-  IconButton,
-  Snackbar,
-  Alert,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
 } from '@mui/material';
 import { Delete, Visibility } from '@mui/icons-material';
 import { useEffect, useState } from 'react';
@@ -29,7 +30,7 @@ import type { Cliente, ProyectoResumen } from '../types';
 import { getClientes } from '../api/clientesApi';
 import { getProyectos, deleteProyecto } from '../api/proyectosApi';
 
-function formatCurrency(value: number) {
+function formatCurrency(value: number | null | undefined) {
   return `$${Number(value || 0).toFixed(2)}`;
 }
 
@@ -42,6 +43,14 @@ function formatDate(dateStr: string | null | undefined) {
   if (!year || !month || !day) return dateStr;
 
   return `${day}/${month}/${year}`;
+}
+
+function getTotalFinalMXN(proyecto: ProyectoResumen) {
+  return Number(proyecto.total_final_mxn ?? proyecto.total_mxn ?? 0);
+}
+
+function getTotalFinalUSD(proyecto: ProyectoResumen) {
+  return Number(proyecto.total_final_usd ?? proyecto.total_usd ?? 0);
 }
 
 export default function ProyectosPage() {
@@ -68,8 +77,8 @@ export default function ProyectosPage() {
   });
 
   useEffect(() => {
-    cargarCatalogos();
-    fetchProyectos();
+    void cargarCatalogos();
+    void fetchProyectos();
   }, []);
 
   const cargarCatalogos = async () => {
@@ -141,7 +150,7 @@ export default function ProyectosPage() {
   };
 
   return (
-    <Box sx={{ maxWidth: 1300, mx: 'auto', mt: 4, px: 2 }}>
+    <Box sx={{ maxWidth: 1450, mx: 'auto', mt: 4, px: 2 }}>
       <Paper elevation={3} sx={{ p: 4, borderRadius: 3, bgcolor: '#f0f4f8' }}>
         <Typography variant="h5" gutterBottom color="primary.main">
           Proyectos
@@ -200,52 +209,72 @@ export default function ProyectosPage() {
           </Button>
         </Box>
 
-        <Table>
-          <TableHead>
-            <TableRow sx={{ backgroundColor: '#e3f2fd' }}>
-              <TableCell><strong>Número</strong></TableCell>
-              <TableCell><strong>Cliente</strong></TableCell>
-              <TableCell><strong>Nombre del proyecto</strong></TableCell>
-              <TableCell><strong>Metodología</strong></TableCell>
-              <TableCell><strong>Fecha Inicio</strong></TableCell>
-              <TableCell><strong>Fecha Fin</strong></TableCell>
-              <TableCell><strong>Total MXN</strong></TableCell>
-              <TableCell><strong>Total USD</strong></TableCell>
-              <TableCell align="right"><strong>Acciones</strong></TableCell>
-            </TableRow>
-          </TableHead>
-
-          <TableBody>
-            {proyectos.map((proyecto) => (
-              <TableRow key={proyecto.id}>
-                <TableCell>{proyecto.numero_proyecto}</TableCell>
-                <TableCell>{proyecto.cliente_nombre}</TableCell>
-                <TableCell>{proyecto.nombre_proyecto || 'Sin nombre'}</TableCell>
-                <TableCell>{proyecto.metodologia || '-'}</TableCell>
-                <TableCell>{formatDate(proyecto.fecha_inicio)}</TableCell>
-                <TableCell>{formatDate(proyecto.fecha_fin)}</TableCell>
-                <TableCell>{formatCurrency(proyecto.total_mxn)}</TableCell>
-                <TableCell>{formatCurrency(proyecto.total_usd)}</TableCell>
-                <TableCell align="right">
-                  <IconButton onClick={() => navigate(`/proyectos/${proyecto.id}`)}>
-                    <Visibility />
-                  </IconButton>
-                  <IconButton onClick={() => handleConfirmDelete(proyecto.id)} color="error">
-                    <Delete />
-                  </IconButton>
-                </TableCell>
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table>
+            <TableHead>
+              <TableRow sx={{ backgroundColor: '#e3f2fd' }}>
+                <TableCell><strong>Número</strong></TableCell>
+                <TableCell><strong>Cliente</strong></TableCell>
+                <TableCell><strong>Nombre</strong></TableCell>
+                <TableCell><strong>Metodología</strong></TableCell>
+                <TableCell><strong>Inicio</strong></TableCell>
+                <TableCell><strong>Fin</strong></TableCell>
+                <TableCell><strong>Subtotal MXN</strong></TableCell>
+                <TableCell><strong>Descuento</strong></TableCell>
+                <TableCell><strong>Total final MXN</strong></TableCell>
+                <TableCell><strong>Total final USD</strong></TableCell>
+                <TableCell align="right"><strong>Acciones</strong></TableCell>
               </TableRow>
-            ))}
+            </TableHead>
 
-            {proyectos.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={9} align="center">
-                  No se encontraron proyectos.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            <TableBody>
+              {proyectos.map((proyecto) => {
+                const hayDescuento = Number(proyecto.descuento_mxn || 0) > 0;
+
+                return (
+                  <TableRow key={proyecto.id} hover>
+                    <TableCell>{proyecto.numero_proyecto}</TableCell>
+                    <TableCell>{proyecto.cliente_nombre}</TableCell>
+                    <TableCell>{proyecto.nombre_proyecto || 'Sin nombre'}</TableCell>
+                    <TableCell>{proyecto.metodologia || '-'}</TableCell>
+                    <TableCell>{formatDate(proyecto.fecha_inicio)}</TableCell>
+                    <TableCell>{formatDate(proyecto.fecha_fin)}</TableCell>
+                    <TableCell>{formatCurrency(proyecto.subtotal_mxn ?? proyecto.total_mxn)}</TableCell>
+                    <TableCell>
+                      {hayDescuento ? (
+                        <Chip
+                          size="small"
+                          color="success"
+                          label={`-${formatCurrency(proyecto.descuento_mxn)}`}
+                        />
+                      ) : (
+                        <Chip size="small" variant="outlined" label="N/A" />
+                      )}
+                    </TableCell>
+                    <TableCell><strong>{formatCurrency(getTotalFinalMXN(proyecto))}</strong></TableCell>
+                    <TableCell><strong>{formatCurrency(getTotalFinalUSD(proyecto))}</strong></TableCell>
+                    <TableCell align="right">
+                      <IconButton onClick={() => navigate(`/proyectos/${proyecto.id}`)}>
+                        <Visibility />
+                      </IconButton>
+                      <IconButton onClick={() => handleConfirmDelete(proyecto.id)} color="error">
+                        <Delete />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+
+              {proyectos.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={11} align="center">
+                    No se encontraron proyectos.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </Box>
 
         <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
           <DialogTitle>Confirmar eliminación</DialogTitle>
